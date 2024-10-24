@@ -1,0 +1,140 @@
+#This is the secound windows 10 script this is to be ran at the end
+#this will 
+
+# List of services to disable
+$insecureServices = @(
+    "RemoteRegistry",  # Allows remote access to the registry
+    "Telnet",          # Unsecured remote command-line
+    "TrkWks",          # Distributed Link Tracking Client
+    "W3SVC",           # Web Publishing Service
+    "SMB1Protocol",    # SMBv1 Protocol, vulnerable to attacks
+    "UPnPHost",        # Universal Plug and Play Host
+    "SSDPDiscovery",   # SSDP Discovery
+    "TermService",     # Remote Desktop Services
+    "WinRM",           # Windows Remote Management
+    "Winmgmt",         # Windows Management Instrumentation (WMI)
+    "LanmanServer",    # SMB/Server Service
+    "NetBT",           # NetBIOS over TCP/IP
+    "bthserv",         # Bluetooth Support Service
+    "FTPSVC",          # File Transfer Protocol (FTP)
+    "POP3SVC",         # Post Office Protocol (POPv1/v2)
+    "FTP",             # FTP Service (alternative name)
+    "RpcSs",           # Remote Procedure Call (RPC)
+    "SNMP",            # Simple Network Management Protocol (SNMP)
+    "IKEEXT",          # IKE and AuthIP IPsec Keying Modules (Can be exploited in VPN/IPsec attacks)
+    "HTTP",            # HTTP service (Commonly used in various attacks, such as web-based RCE)
+    "TapiSrv",         # Telephony (Older service, sometimes targeted in privilege escalation)
+    "RasMan",          # Remote Access Connection Manager (Exploited in certain remote access attacks)
+    "TermDD"           # Terminal Device Driver (Part of RDP exploitation)
+    "ADWS",            # Active Directory Web Services
+    "DNS",             # DNS Server
+    "DHCPServer",      # DHCP Server
+    "Fax",             # Fax Service
+    "VMMS",            # Hyper-V Virtual Machine Management
+    "WDS",             # Windows Deployment Services
+    "IISAdmin",        # IIS Admin Service
+    "DFS",             # Distributed File System
+    "NPS",             # Network Policy Server
+    "WSS",             # Windows Server Backup
+    "StorSvc",         # Storage Service
+    "WSUS"             # Windows Server Update Services
+)
+
+# Loops through each service and disable it
+foreach ($service in $insecureServices) {
+    try {
+        # Gets the current status of the service
+        $serviceStatus = Get-Service -Name $service -ErrorAction SilentlyContinue
+
+        if ($serviceStatus.Status -eq "Running") {
+            Write-Host "Stopping and disabling $service..."
+            Stop-Service -Name $service -Force
+        }
+
+        # Sets the service to Disabled startup type
+        Set-Service -Name $service -StartupType Disabled
+        Write-Host "$service has been disabled."
+    } catch {
+        Write-Host "Service $service could not be found or modified. It may not be installed on this system."
+    }
+}
+
+# Asks for user inputs
+$userInput = Read-Host "Enter the username of the account"
+$roleInput = Read-Host "Enter the role for the account (Administrator/Standard)"
+
+# Get all local user accounts
+$localUsers = Get-LocalUser
+
+# Variable to track unlisted accounts
+$unlistedAccounts = @()
+
+# Function to set role of a user
+function Set-UserRole {
+    param(
+        [string]$username,
+        [string]$desiredRole
+    )
+
+    # Check if user exists
+    $user = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+
+    if ($user) {
+        # Check current role of the user
+        $currentGroups = (Get-LocalGroupMember -Group "Administrators" | Where-Object { $_.Name -eq $username })
+
+        if ($desiredRole -eq "Administrator") {
+            if (-not $currentGroups) {
+                # If user is not in Administrators group, add them
+                Add-LocalGroupMember -Group "Administrators" -Member $username
+                Write-Host "Updated $username to Administrator role."
+            } else {
+                Write-Host "$username is already an Administrator."
+            }
+        } elseif ($desiredRole -eq "Standard") {
+            if ($currentGroups) {
+                # If user is in Administrators group, remove them
+                Remove-LocalGroupMember -Group "Administrators" -Member $username
+                Write-Host "Updated $username to Standard role."
+            } else {
+                Write-Host "$username is already a Standard user."
+            }
+        } else {
+            Write-Host "Invalid role specified."
+        }
+    } else {
+        Write-Host "User $username does not exist."
+    }
+}
+
+# Checks and updates the role for the inputted user
+Set-UserRole -username $userInput -desiredRole $roleInput
+
+# Loops through all local users and check their roles
+foreach ($user in $localUsers) {
+    if ($user.Name -ne $userInput) {
+        $currentGroups = (Get-LocalGroupMember -Group "Administrators" | Where-Object { $_.Name -eq $user.Name })
+
+        # If the user's role doesn't match the input, update it
+        if ($roleInput -eq "Administrator" -and -not $currentGroups) {
+            Add-LocalGroupMember -Group "Administrators" -Member $user.Name
+            Write-Host "Updated $($user.Name) to Administrator role."
+        } elseif ($roleInput -eq "Standard" -and $currentGroups) {
+            Remove-LocalGroupMember -Group "Administrators" -Member $user.Name
+            Write-Host "Updated $($user.Name) to Standard role."
+        } else {
+            # Track unlisted accounts
+            $unlistedAccounts += $user.Name
+        }
+    }
+}
+
+# If there are unlisted accounts, output them
+if ($unlistedAccounts.Count -gt 0) {
+    Write-Host "`nThese accounts were not listed and may need review:"
+    foreach ($account in $unlistedAccounts) {
+        Write-Host $account
+    }
+} else {
+    Write-Host "`nAll accounts are accounted for."
+}
