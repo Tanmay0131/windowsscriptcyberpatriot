@@ -1,0 +1,135 @@
+#This is the first in the set of scripts for windows 10
+#You should read the whole read me and do your forensics questions first be for starting this script
+#YOU NEED TO RUN THIS IN ADMIN
+
+Write-Host "Starting script"
+
+# Check if PSWindowsUpdate module is already installed, and install it if not.
+if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+    Write-Host "PSWindowsUpdate module not found. Installing..."
+    Install-Module -PSWindowsUpdate -Force
+} else {
+    Write-Host "PSWindowsUpdate module is already installed."
+}
+
+# Enable Private and Public firewall profiles
+Set-NetFirewallProfile -Profile Private -Enabled True
+Set-NetFirewallProfile -Profile Public -Enabled True
+
+# Enable Microsoft Defender services
+Write-Host "Enabling Microsoft Defender"
+Set-MpPreference -DisableRealtimeMonitoring $false
+Set-MpPreference -DisableBehaviorMonitoring $false
+Set-MpPreference -DisableBlockAtFirstSeen $false
+Set-MpPreference -DisableIOAVProtection $false
+Set-MpPreference -DisableIntrusionPreventionSystem $false
+Set-MpPreference -DisableScriptScanning $false
+
+# Defines the registry key path for Windows Update
+$regPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+$regValueName = "NoAutoUpdate"
+
+# Check and modify the Windows Update setting
+if (Test-Path $regPath) {
+    $noAutoUpdate = Get-ItemProperty -Path $regPath -Name $regValueName -ErrorAction SilentlyContinue
+
+    if ($noAutoUpdate -and $noAutoUpdate.NoAutoUpdate -eq 1) {
+        Write-Host "Windows Updates are currently disabled. Enabling them now..."
+        Set-ItemProperty -Path $regPath -Name $regValueName -Value 0
+        Write-Host "Windows Updates have been enabled."
+    } else {
+        Write-Host "Windows Updates are already enabled or no setting found."
+    }
+} else {
+    Write-Host "Windows Update registry key not found. Windows Updates should be enabled by default."
+}
+
+# Check for available updates
+Write-Host "Checking for available updates..."
+$updates = Get-WindowsUpdate
+
+if ($updates) {
+    Write-Host "Updates found. Installing updates..."
+    Install-WindowsUpdate -AcceptAll -IgnoreReboot
+    Write-Host "Updates installed successfully."
+} else {
+    Write-Host "No updates found."
+}
+
+# Start Microsoft Defender full system scan
+Write-Host "Starting Microsoft Defender full system scan..."
+Start-MpScan -ScanType FullScan
+
+# Disable all guest user accounts
+$users = Get-WmiObject -Class Win32_UserAccount -Filter "LocalAccount=True"
+
+foreach ($user in $users) {
+    if ($user.SID -like "*-501" -or $user.Name -eq "Guest") {
+        Write-Host "Disabling guest account: $($user.Name)"
+        try {
+            Disable-LocalUser -Name $user.Name
+            Write-Host "$($user.Name) has been disabled."
+        } catch {
+            Write-Host "Failed to disable $($user.Name): $_"
+        }
+    } else {
+        Write-Host "User $($user.Name) is not a guest account."
+    }
+}
+
+Write-Host "Guest user account check and disabling completed."
+
+# Set password policies
+Write-Host "Setting Password History to 7 previous passwords..."
+secedit /export /cfg C:\Windows\Temp\secpol.cfg
+(Get-Content C:\Windows\Temp\secpol.cfg) -replace "PasswordHistorySize = \d+", "PasswordHistorySize = 7" | Set-Content C:\Windows\Temp\secpol.cfg
+secedit /configure /db secedit.sdb /cfg C:\Windows\Temp\secpol.cfg
+Remove-Item C:\Windows\Temp\secpol.cfg
+
+Write-Host "Setting Maximum Password Age to 90 days..."
+net accounts /maxpwage:90
+
+Write-Host "Setting Minimum Password Age to 15 days..."
+net accounts /minpwage:15
+
+Write-Host "Setting Minimum Password Length to 12 characters..."
+net accounts /minpwlen:12
+
+Write-Host "Enables password History to 7"
+Set-ADDefaultDomainPasswordPolicy -PasswordHistoryCount 7
+
+Write-Host "Enabling Password Complexity Requirement..."
+$complexityKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters"
+Set-ItemProperty -Path $complexityKey -Name "PasswordComplexity" -Value 1
+
+Write-Host "Password policies have been successfully configured."
+
+# Define the action: "Enable" for Success, "Disable" for Failure
+$action = "Enable" # Change to "Disable" to reverse the settings
+
+# Set audit policies based on the action
+function Set-AuditPolicy {
+    param (
+        [string]$action
+    )
+
+    $auditPolicies = auditpol /get /category:* | Select-String -Pattern "^[\w\s]+"
+
+    foreach ($policy in $auditPolicies) {
+        $policyName = $policy.ToString().Trim()
+        if ($action -eq "Enable") {
+            auditpol /set /subcategory:"$policyName" /success:enable /failure:disable
+            Write-Host "Enabled Success auditing for: $policyName"
+        } elseif ($action -eq "Disable") {
+            auditpol /set /subcategory:"$policyName" /success:disable /failure:enable
+            Write-Host "Disabled Success auditing for: $policyName"
+        }
+    }
+}
+
+# Call the function to set audit policies
+Set-AuditPolicy -action $action
+
+Write-Host "Audit policy settings updated."
+
+Write-Host "End of script 1"
